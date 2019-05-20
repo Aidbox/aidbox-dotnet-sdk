@@ -1,0 +1,35 @@
+#!/bin/sh
+set -e
+
+sub_help(){
+    echo "Usage: ./runme <subcommand> [options]\n"
+    echo "Subcommands:"
+    echo "    repl"
+    echo ""
+}
+
+sub_repl(){
+
+  echo "Starting repl..."
+
+  clj \
+      -A:dev \
+      -Sdeps '{:deps {org.clojure/tools.nrepl {:mvn/version "0.2.13"} refactor-nrepl {:mvn/version "2.4.0-SNAPSHOT"} cider/cider-nrepl {:mvn/version "0.17.0-SNAPSHOT"}}}' \
+      -e '(require (quote cider-nrepl.main) (quote sdk-generator.core)) (cider-nrepl.main/init ["refactor-nrepl.middleware/wrap-refactor", "cider.nrepl/cider-middleware"])'
+}
+
+subcommand=$1
+case $subcommand in
+    "" | "-h" | "--help")
+        sub_help
+        ;;
+    *)
+        shift
+        sub_${subcommand} $@
+        if [ $? = 127 ]; then
+            echo "Error: '$subcommand' is not a known subcommand." >&2
+            echo "       Run './runme --help' for a list of known subcommands." >&2
+            exit 1
+        fi
+        ;;
+esac

@@ -1,0 +1,12 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure             {:mvn/version "1.10.0"}
+        org.clojure/tools.logging       {:mvn/version "0.3.1"}
+        http-kit                        {:mvn/version "2.2.0"}}
+
+ :mvn/repos {"central" {:url "https://repo1.maven.org/maven2/"}
+             "clojars" {:url "https://repo.clojars.org/"}}
+
+ :aliases {:dev  {:jvm-opts ^:replace ["-XX:-OmitStackTraceInFastThrow"]}
+           :pack {:extra-deps {pack/pack.alpha {:git/url "https://github.com/juxt/pack.alpha.git"
+                                                :sha "1d455f6c591f440560c57a29e6d930004d735dcf"}}
+                  :main-opts ["-m"]}}}
