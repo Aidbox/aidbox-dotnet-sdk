@@ -2,8 +2,9 @@ namespace AidboxSDK.Resources
 {
     /// <summary>
     /// ~a
-    /// </summary>  
+    /// </summary>
     public ~a class ~a~a
     {
+~{~a~%~%~^~}
     }
 }

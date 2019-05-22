@@ -3,21 +3,28 @@
             [sdk-generator.utils :as u]
             [clojure.pprint :as pprint]
             [org.httpkit.client :as http]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [clojure.string :as str]))
 
-(def project        (u/resource "project.tpl"))
-(def assembly-info  (u/resource "assembly-info.tpl"))
-(def resource-class (u/resource "resource-class.tpl"))
-(def primitive-types {:unsignedInt "System.UInt64"
+(def project         (u/resource "project.tpl"))
+(def assembly-info   (u/resource "assembly-info.tpl"))
+(def resource-class  (u/resource "resource-class.tpl"))
+(def property        (u/resource "property.tpl"))
+(def value-types     {:unsignedInt "System.UInt64"
                       :unsignedint "System.UInt64"
-                      :date "System.DateTime"
-                      :instant "System.DateTime"
-                      :time "System.DateTime"
-                      :string "System.String"
-                      :decimal "System.Decimal"})
+                      :date        "System.DateTime"
+                      :dateTime    "System.DateTime"
+                      :instant     "System.DateTime"
+                      :time        "System.DateTime"
+                      :decimal     "System.Decimal"})
+(def reference-types {:string "System.String"})
+(def primitive-types (merge value-types reference-types))
 
 (defn fmt [s & args]
   (apply pprint/cl-format true s args))
+
+(defn sfmt [s & args]
+  (apply pprint/cl-format nil s args))
 
 (defn generate-project [uuid files]
   (fmt project uuid files))
@@ -26,41 +33,97 @@
   (fmt assembly-info uuid))
 
 ;; https://forsdk.aidbox.app/$metadata
-(defn generate-resource-class [[id props]]
+(defn find-resource-attributes [resource metadata]
+  (->> metadata :Attribute
+       (filter #(= (-> % second :resource :id)
+                   (name resource)))
+       (map second)))
+
+(defn simple-field? [attribute]
+  (and (= (count (:path attribute)) 1)
+       (not (nil? (:type attribute)))
+       (nil? (:union attribute))))
+
+(defn primitive-field? [attribute]
+  (and (simple-field? attribute)
+       (-> attribute :type :id keyword primitive-types)))
+
+(defn nullable-primitive-field? [attribute]
+  (and (primitive-field? attribute)
+       (-> attribute :type :id keyword value-types)
+       (nil? (:isRequired attribute))))
+
+(defn pascal-case [s]
+  (str (str/upper-case (subs s 0 1)) (subs s 1)))
+
+(defn field-type [attribute]
+  (cond
+    (nullable-primitive-field? attribute)
+    (str "System.Nullable<" (-> attribute :type :id keyword primitive-types) ">")
+
+    (primitive-field? attribute)
+    (-> attribute :type :id keyword primitive-types)
+    
+    (simple-field? attribute)
+    (-> attribute :type :id pascal-case)
+
+    ))
+
+(defn field-name [attribute]
+  (-> attribute :path first str/capitalize))
+
+(defn generate-field [attribute]
+  (let [comment (or (:description attribute) "")
+        type    (field-type attribute)
+        name    (field-name attribute)]
+    (when type
+      (sfmt property comment type name))))
+
+(defn entity-name [id]
+  (-> id name pascal-case))
+
+(defn generate-resource-class [[id props] metadata]
   (let [comment (or (:description props) "")
         modifiers (if (= (:type props) "abstract")
                     "abstract"
                     "partial")
-        class-name (name id)
+        class-name (entity-name id)
         base-class (case id
-                     :Resource ""
+                     :Resource                                     ""
                      (:DomainResource :Bundle :Parameters :Binary) " : Resource"
-                     ": DomainResource")]
-    (fmt resource-class comment modifiers class-name base-class)))
+                     " : DomainResource")
+        attributes (find-resource-attributes id metadata)
+        class-fields (->> attributes
+                          (map generate-field)
+                          (filter some?))]
+    (fmt resource-class comment modifiers class-name base-class class-fields)))
 
-(defn find-resource-attributes [resource metadata]
-  (->> metadata :Attribute
-       (filter #(= (-> % second :resource :id) (name resource)))
-       (map second)))
+(defonce metadata-atom (atom nil))
 
-(defn load-metadata [zip aidbox-server]
-  (let [response @(http/get (str aidbox-server "/$metadata"))
-        metadata (json/parse-string (:body response) keyword)]
-    (->> metadata :Entity
-         (map (fn [entity]
-                (when-not (primitive-types (first entity))
-                  (let [entry-file (str "Resources/"  (name (first entity)) ".cs")
-                        class-file (str "Resources\\" (name (first entity)) ".cs")]
-                    (zip/with-entry zip entry-file
-                      (generate-resource-class entity))
-                    class-file))))
-         (filter identity)
-         (doall))))
+(defn load-metadata [aidbox-server]
+  (or @metadata-atom
+      (let [response @(http/get (str aidbox-server "/$metadata"))
+            metadata (json/parse-string (:body response) keyword)]
+        (reset! metadata-atom metadata))))
+
+(defn generate-classes [zip metadata]
+  (->> metadata :Entity
+       (map (fn [entity]
+              (when-not (primitive-types (first entity))
+                (let [entity-name (entity-name (first entity))
+                      entry-file (str "Resources/"  entity-name ".cs")
+                      class-file (str "Resources\\" entity-name ".cs")]
+                  (zip/with-entry zip entry-file
+                    (generate-resource-class entity metadata))
+                  class-file))))
+       (filter identity)
+       (doall)))
 
 (defn generate-library [path]
   (let [uuid (u/uuid)]
     (zip/with-archive (zip (str path "AidboxSDK.zip"))
-      (let [class-files (load-metadata zip "https://forsdk.aidbox.app")]
+      (let [metadata (load-metadata "https://forsdk.aidbox.app")
+            class-files (generate-classes zip metadata)]
         (zip/with-entry zip "AidboxSDK.csproj"
           (generate-project uuid class-files))
         (zip/with-entry zip "Properties/AssemblyInfo.cs"
