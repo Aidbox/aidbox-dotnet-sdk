@@ -41,12 +41,18 @@
 
 (defn simple-field? [attribute]
   (and (= (count (:path attribute)) 1)
+       (not= (:path attribute) ["adjudication"])    ; only for testing purposes
        (not (nil? (:type attribute)))
        (nil? (:union attribute))))
 
 (defn primitive-field? [attribute]
   (and (simple-field? attribute)
        (-> attribute :type :id keyword primitive-types)))
+
+(defn compound-field? [attribute]
+  (or (> (count (:path attribute)) 1)
+      (when-let [t (-> attribute :type :id)]
+        (str/includes? t "."))))
 
 (defn nullable-primitive-field? [attribute]
   (and (primitive-field? attribute)
@@ -58,6 +64,9 @@
 
 (defn field-type [attribute]
   (cond
+    (compound-field? attribute)
+    nil
+
     (nullable-primitive-field? attribute)
     (str "System.Nullable<" (-> attribute :type :id keyword primitive-types) ">")
 
@@ -69,8 +78,11 @@
 
     ))
 
+(def resereved-words #{"abstract" "as" "base" "bool" "break" "byte" "case" "catch" "char" "checked" "class" "const" "continue" "decimal" "default" "delegate" "do" "double" "else" "enum" "event" "explicit" "extern" "false" "finally" "fixed" "float" "for" "foreach" "goto" "if" "implicit" "in" "int" "interface" "internal" "is" "lock" "long" "namespace" "new" "null" "object" "operator" "out" "override" "params" "private" "protected" "public" "readonly" "ref" "return" "sbyte" "sealed" "short" "sizeof" "stackalloc" "static" "string" "struct" "switch" "this" "throw" "true" "try" "typeof" "uint" "ulong" "unchecked" "unsafe" "ushort" "using" "virtual" "void" "volatile" "while" "add" "alias" "ascending" "async" "await" "by" "descending" "dynamic" "equals" "from" "get" "global" "group" "into" "join" "let" "nameof" "on" "orderby" "partial" "remove" "select" "set" "value" "var" "when" "where" "yield"})
+
 (defn field-name [attribute]
-  (-> attribute :path first str/capitalize))
+  (let [name (-> attribute :path first)]
+    (str (when (resereved-words name) "@") name)))
 
 (defn generate-field [attribute]
   (let [comment (or (:description attribute) "")

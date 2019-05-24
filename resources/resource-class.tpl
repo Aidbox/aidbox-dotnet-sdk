@@ -5,6 +5,6 @@ namespace AidboxSDK.Resources
     /// </summary>
     public ~a class ~a~a
     {
-~{~a~%~%~^~}
+~{~a~^~%~%~}
     }
 }
