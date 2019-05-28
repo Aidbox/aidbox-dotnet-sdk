@@ -1,4 +1,4 @@
-        /// <summary>
-        /// ~a
-        /// </summary>
-        public ~a ~a;
+/// <summary>
+/// ~a
+/// </summary>
+public ~a ~a;

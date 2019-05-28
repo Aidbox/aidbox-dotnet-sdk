@@ -10,13 +10,16 @@
 (def assembly-info   (u/resource "assembly-info.tpl"))
 (def resource-class  (u/resource "resource-class.tpl"))
 (def property        (u/resource "property.tpl"))
-(def value-types     {:unsignedInt "System.UInt64"
+(def nested-class    (u/resource "nested-class.tpl"))
+(def value-types     {:integer     "System.Int64"
+                      :unsignedInt "System.UInt64"
                       :unsignedint "System.UInt64"
                       :date        "System.DateTime"
                       :dateTime    "System.DateTime"
                       :instant     "System.DateTime"
                       :time        "System.DateTime"
-                      :decimal     "System.Decimal"})
+                      :decimal     "System.Decimal"
+                      :boolean     "System.Boolean"})
 (def reference-types {:string "System.String"})
 (def primitive-types (merge value-types reference-types))
 
@@ -25,6 +28,14 @@
 
 (defn sfmt [s & args]
   (apply pprint/cl-format nil s args))
+
+(defn fmt-property [comment type name & [tabs]]
+  (let [indent (* 4 (or tabs 2))
+        s      (sfmt property comment type name)
+        lines  (str/split-lines s)]
+    (->> lines
+         (map #(str (apply str (repeat indent " ")) %))
+         (str/join \newline))))
 
 (defn generate-project [uuid files]
   (fmt project uuid files))
@@ -64,6 +75,9 @@
 
 (defn field-type [attribute]
   (cond
+    (:polymorphic? attribute)
+    (:type attribute)
+
     (compound-field? attribute)
     nil
 
@@ -78,21 +92,57 @@
 
     ))
 
-(def resereved-words #{"abstract" "as" "base" "bool" "break" "byte" "case" "catch" "char" "checked" "class" "const" "continue" "decimal" "default" "delegate" "do" "double" "else" "enum" "event" "explicit" "extern" "false" "finally" "fixed" "float" "for" "foreach" "goto" "if" "implicit" "in" "int" "interface" "internal" "is" "lock" "long" "namespace" "new" "null" "object" "operator" "out" "override" "params" "private" "protected" "public" "readonly" "ref" "return" "sbyte" "sealed" "short" "sizeof" "stackalloc" "static" "string" "struct" "switch" "this" "throw" "true" "try" "typeof" "uint" "ulong" "unchecked" "unsafe" "ushort" "using" "virtual" "void" "volatile" "while" "add" "alias" "ascending" "async" "await" "by" "descending" "dynamic" "equals" "from" "get" "global" "group" "into" "join" "let" "nameof" "on" "orderby" "partial" "remove" "select" "set" "value" "var" "when" "where" "yield"})
+(defn find-polymorphic-attributes [attributes]
+  (let [polymorphics (->> attributes
+                          (filter :union)
+                          (reduce (fn [acc attr]
+                                    (assoc acc (-> attr :path first) attr))
+                                  {}))
+        polymorphics (->> attributes
+                          (filter #(polymorphics (-> % :path first)))
+                          (group-by (comp first :path))
+                          (map (fn [[k attrs]]
+                                 [{:path [k]
+                                   :polymorphic? true
+                                   :type (str (pascal-case k) "X")
+                                   :description (-> k polymorphics :description)}
+                                  attrs])))]
+    polymorphics))
+
+(defn group-attributes [attributes]
+  (let [polymorphics (map first (find-polymorphic-attributes attributes))
+        pset         (set (map (comp first :path) polymorphics))
+        attributes   (remove #(pset (-> % :path first)) attributes)]
+    (concat attributes polymorphics)))
+
+(def reserved-words #{"abstract" "as" "base" "bool" "break" "byte" "case" "catch" "char" "checked" "class" "const" "continue" "decimal" "default" "delegate" "do" "double" "else" "enum" "event" "explicit" "extern" "false" "finally" "fixed" "float" "for" "foreach" "goto" "if" "implicit" "in" "int" "interface" "internal" "is" "lock" "long" "namespace" "new" "null" "object" "operator" "out" "override" "params" "private" "protected" "public" "readonly" "ref" "return" "sbyte" "sealed" "short" "sizeof" "stackalloc" "static" "string" "struct" "switch" "this" "throw" "true" "try" "typeof" "uint" "ulong" "unchecked" "unsafe" "ushort" "using" "virtual" "void" "volatile" "while" "add" "alias" "ascending" "async" "await" "by" "descending" "dynamic" "equals" "from" "get" "global" "group" "into" "join" "let" "nameof" "on" "orderby" "partial" "remove" "select" "set" "value" "var" "when" "where" "yield"})
 
 (defn field-name [attribute]
   (let [name (-> attribute :path first)]
-    (str (when (resereved-words name) "@") name)))
+    (str (when (reserved-words name) "@") name)))
 
-(defn generate-field [attribute]
+(defn generate-field [attribute & [tabs]]
   (let [comment (or (:description attribute) "")
         type    (field-type attribute)
         name    (field-name attribute)]
     (when type
-      (sfmt property comment type name))))
+      (fmt-property comment type name tabs))))
 
 (defn entity-name [id]
   (-> id name pascal-case))
+
+(defn generate-nested-class [[field attributes]]
+  (let [name       (:type field)
+        attributes (remove :union attributes)
+        fields     (->> attributes
+                        (map #(assoc % :path (rest (:path %))))
+                        (map #(generate-field % 4))
+                        (filter some?))]
+    (sfmt nested-class name fields)))
+
+(defn generate-nested-classes [attributes]
+  (let [polymorphics (find-polymorphic-attributes attributes)]
+    (map generate-nested-class polymorphics)))
 
 (defn generate-resource-class [[id props] metadata]
   (let [comment (or (:description props) "")
@@ -104,11 +154,16 @@
                      :Resource                                     ""
                      (:DomainResource :Bundle :Parameters :Binary) " : Resource"
                      " : DomainResource")
-        attributes (find-resource-attributes id metadata)
+        attributes (-> id
+                       (find-resource-attributes metadata)
+                       (group-attributes))
         class-fields (->> attributes
                           (map generate-field)
-                          (filter some?))]
-    (fmt resource-class comment modifiers class-name base-class class-fields)))
+                          (filter some?))
+        nested-classes (-> id
+                           (find-resource-attributes metadata)
+                           (generate-nested-classes))]
+    (fmt resource-class comment modifiers class-name base-class nested-classes class-fields)))
 
 (defonce metadata-atom (atom nil))
 
